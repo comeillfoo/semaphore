@@ -45,8 +45,7 @@ enum states_type {
 	ST_YELLOW = 3
 };
 
-struct semaphore_state {
-	enum states_type state;
+struct stoplight_state {
 	enum light_colours colour;
 	enum light_type type;
 	uint32_t period;
@@ -55,9 +54,9 @@ struct semaphore_state {
 
 #define STATES_NR 4
 
-struct semaphore {
-	struct semaphore_state states[STATES_NR];
-	struct semaphore_state current;
+struct stoplight {
+	struct stoplight_state states[STATES_NR];
+	enum states_type current;
 	int should_restore;
 	int is_green_requested;
 };
@@ -80,14 +79,14 @@ struct semaphore {
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-static struct semaphore global_semaphore = {
+static struct stoplight global_stoplight = {
 	{
-		{ST_RED,     LC_RED,    LT_NONBLINKING, BASE_LIGHT_PERIOD * 4},
-		{ST_GREEN,   LC_GREEN,  LT_NONBLINKING, BASE_LIGHT_PERIOD    },
-		{ST_WARNING, LC_GREEN,  LT_BLINKING,    BASE_LIGHT_PERIOD    },
-		{ST_YELLOW,  LC_YELLOW, LT_NONBLINKING, BASE_LIGHT_PERIOD    }
+		{LC_RED,    LT_NONBLINKING, BASE_LIGHT_PERIOD * 4},
+		{LC_GREEN,  LT_NONBLINKING, BASE_LIGHT_PERIOD    },
+		{LC_GREEN,  LT_BLINKING,    BASE_LIGHT_PERIOD    },
+		{LC_YELLOW, LT_NONBLINKING, BASE_LIGHT_PERIOD    }
 	},
-	{ST_YELLOW,  LC_YELLOW, LT_NONBLINKING, BASE_LIGHT_PERIOD    },
+	ST_RED,
 	0,
 	0
 };
@@ -96,11 +95,9 @@ static struct semaphore global_semaphore = {
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
-static GPIO_PinState btn_set_debounce(GPIO_TypeDef*, uint16_t, uint32_t);
+static struct stoplight stoplight_next_state(struct stoplight);
 
-static void semaphore_next_state(struct semaphore*);
-
-static struct semaphore semaphore_reset(struct semaphore);
+static struct stoplight stoplight_reset(struct stoplight);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -137,7 +134,7 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   /* USER CODE BEGIN 2 */
-  global_semaphore = semaphore_reset(global_semaphore);
+  global_stoplight = stoplight_reset(global_stoplight);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -147,7 +144,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	semaphore_next_state(&global_semaphore);
+	  global_stoplight = stoplight_next_state(global_stoplight);
   }
   /* USER CODE END 3 */
 }
@@ -205,34 +202,50 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
-static void short_period(struct semaphore* semaphore) {
-	if (!(semaphore->should_restore) && (!semaphore->is_green_requested)) {
-		semaphore->should_restore = 1; // true
-		semaphore->states[ST_RED].period = semaphore->states[ST_RED].period / 4;
+static struct stoplight short_period(struct stoplight sl) {
+	if (!sl.should_restore && sl.is_green_requested) {
+		sl.should_restore = 1; // true
+		sl.is_green_requested = 0;
+		sl.states[ST_RED].period = sl.states[ST_RED].period / 4;
 	}
+	return sl;
 }
 
-static void restore_period(struct semaphore* semaphore) {
-	if (semaphore->should_restore) {
-		semaphore->should_restore = 0;
-		semaphore->states[ST_RED].period = semaphore->states[ST_RED].period * 4;
+static struct stoplight restore_period(struct stoplight sl) {
+	if (sl.should_restore) {
+		sl.should_restore = 0;
+		sl.states[ST_RED].period = sl.states[ST_RED].period * 4;
 	}
+	return sl;
 }
 
-static void wait_for_press(struct semaphore* semaphore, uint32_t blink_period) {
+
+static GPIO_PinState btn_set_debounce(GPIO_TypeDef* type_p, uint16_t btn, uint32_t delay) {
+	const GPIO_PinState measure_1 = HAL_GPIO_ReadPin(type_p, btn);
+	HAL_Delay(delay);
+	const GPIO_PinState measure_2 = HAL_GPIO_ReadPin(type_p, btn);
+	return (measure_1 && measure_2)? GPIO_PIN_SET : GPIO_PIN_RESET;
+}
+
+
+static struct stoplight wait_for_press(struct stoplight sl, uint32_t blink_period) {
 	size_t i = 0;
-	while ((i * (COMMON_DELAY) * blink_period) < semaphore->states[semaphore->current.state].period) {
-		semaphore->is_green_requested = (btn_set_debounce(GPIOC, nBTN_Pin, (COMMON_DELAY)) == GPIO_PIN_SET)? 1 : 0;
-		switch (semaphore->current.state) {
-			case ST_RED:     short_period(semaphore); break;
-			case ST_GREEN:   restore_period(semaphore); break;
-			case ST_WARNING: restore_period(semaphore); break;
-			case ST_YELLOW:  short_period(semaphore); break;
+	while ((i * (COMMON_DELAY) * blink_period) < sl.states[sl.current].period) {
+		// because nBTN signal is inverted
+		sl.is_green_requested = !btn_set_debounce(GPIOC, nBTN_Pin, (COMMON_DELAY));
+
+		switch (sl.current) {
+			case ST_RED:     sl = short_period(sl); break;
+			case ST_GREEN:   sl = restore_period(sl); break;
+			case ST_WARNING: sl = restore_period(sl); break;
+			case ST_YELLOW:  sl = short_period(sl); break;
 			default: break;
 		}
-		semaphore->is_green_requested = 0;
+
 		++i;
 	}
+
+	return sl;
 }
 
 static void turn_on_light(enum light_colours colour) {
@@ -264,37 +277,34 @@ static void turn_off_light(enum light_colours colour) {
 	}
 }
 
-static void light_state(struct semaphore* s_p) {
-	const size_t limit = (s_p->current.type == LT_NONBLINKING)? 1 : (BLINKS_NR);
-	const size_t blink_period = (s_p->current.type == LT_NONBLINKING)? limit : (2 * limit);
+static struct stoplight light_state(struct stoplight sl) {
+	const size_t limit        = (sl.states[sl.current].type == LT_NONBLINKING)? 1 : (BLINKS_NR);
+	const size_t blink_period = (sl.states[sl.current].type == LT_NONBLINKING)? limit : (2 * limit);
+
 	for (size_t i = 0; i < limit; ++i) {
-		turn_on_light(s_p->current.colour);
-		wait_for_press(s_p, blink_period);
-		// HAL_Delay(current.period / blink_period);
-		turn_off_light(s_p->current.colour);
-		if (s_p->current.type != LT_NONBLINKING)
-			wait_for_press(s_p, blink_period);
+		turn_on_light(sl.states[sl.current].colour);
+		sl = wait_for_press(sl, blink_period);
+
+		turn_off_light(sl.states[sl.current].colour);
+		if (sl.states[sl.current].type != LT_NONBLINKING)
+			sl = wait_for_press(sl, blink_period);
 	}
+	return sl;
 }
 
-static GPIO_PinState btn_set_debounce(GPIO_TypeDef* type_p, uint16_t btn, uint32_t delay) {
-	const GPIO_PinState measure_1 = HAL_GPIO_ReadPin(type_p, btn);
-	HAL_Delay(delay);
-	const GPIO_PinState measure_2 = HAL_GPIO_ReadPin(type_p, btn);
-	return ((int) measure_1 && (int) measure_2)? GPIO_PIN_SET : GPIO_PIN_RESET;
+
+static struct stoplight stoplight_next_state(struct stoplight sl) {
+	sl = light_state(sl);
+
+	sl.current = (sl.current + 1) % (STATES_NR);
+	return sl;
 }
 
-static void semaphore_next_state(struct semaphore* semaphore) {
-	light_state(semaphore);
-
-	semaphore->current = semaphore->states[(((int) semaphore->current.state) + 1) % (STATES_NR)];
-}
-
-static struct semaphore semaphore_reset(struct semaphore sem) {
-	sem.current = sem.states[ST_RED];
-	sem.should_restore = 0;
-	sem.is_green_requested = 0;
-	return sem;
+static struct stoplight stoplight_reset(struct stoplight sl) {
+	sl.current = ST_RED;
+	sl.should_restore = 0;
+	sl.is_green_requested = 0;
+	return sl;
 }
 /* USER CODE END 4 */
 
