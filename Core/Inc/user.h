@@ -8,7 +8,7 @@
 #ifndef INC_USER_H_
 #define INC_USER_H_
 
-#include "main.h"
+#include "settings.h"
 
 enum command {
 	C_GET_HELP = 0,
@@ -54,5 +54,7 @@ typedef void (*executor)(struct context, struct request, char[RESPONSE_LENGTH]);
 
 
 struct request read_command(struct settings);
+
+void user_uart_handler(void);
 
 #endif /* INC_USER_H_ */

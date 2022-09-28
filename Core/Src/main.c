@@ -20,6 +20,7 @@
 #include "main.h"
 #include "usart.h"
 #include "gpio.h"
+#include "stoplight.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -33,10 +34,6 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define COMMON_DELAY (250)
-
-#define BASE_LIGHT_PERIOD (1000)
-#define BLINKS_NR 3
 
 /* USER CODE END PD */
 
@@ -48,31 +45,13 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-static struct settings global_settings = {
-	.mode = M_BTN_PROCESSED,
-	.timeout = BASE_LIGHT_PERIOD,
-	.is_interrupts_on = INT_POLLING
-};
-
-static struct stoplight global_stoplight = {
-	{
-		{LC_RED,    LT_NONBLINKING, 4},
-		{LC_GREEN,  LT_NONBLINKING, 1},
-		{LC_GREEN,  LT_BLINKING,    1},
-		{LC_YELLOW, LT_NONBLINKING, 1}
-	},
-	ST_RED,
-	0,
-	0
-};
+extern struct stoplight global_stoplight;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
-static struct stoplight stoplight_next_state(struct stoplight);
 
-static struct stoplight stoplight_reset(struct stoplight);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -178,111 +157,7 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
-static struct stoplight short_period(struct stoplight sl) {
-	if (!sl.should_restore && sl.is_green_requested) {
-		sl.should_restore = 1; // true
-		sl.is_green_requested = 0;
-		sl.states[ST_RED].period_factor = sl.states[ST_RED].period_factor / 4;
-	}
-	return sl;
-}
 
-static struct stoplight restore_period(struct stoplight sl) {
-	if (sl.should_restore) {
-		sl.should_restore = 0;
-		sl.states[ST_RED].period_factor = sl.states[ST_RED].period_factor * 4;
-	}
-	return sl;
-}
-
-
-static GPIO_PinState btn_set_debounce(GPIO_TypeDef* type_p, uint16_t btn, uint32_t delay) {
-	const GPIO_PinState measure_1 = HAL_GPIO_ReadPin(type_p, btn);
-	HAL_Delay(delay);
-	const GPIO_PinState measure_2 = HAL_GPIO_ReadPin(type_p, btn);
-	return (measure_1 && measure_2)? GPIO_PIN_SET : GPIO_PIN_RESET;
-}
-
-
-static struct stoplight wait_for_press(struct stoplight sl, uint32_t blink_period) {
-	size_t i = 0;
-	const char message[] = "hello stm32\r\n";
-	while ((i * (COMMON_DELAY) * blink_period) < sl.states[sl.current].period_factor * global_settings.timeout) {
-		// because nBTN signal is inverted
-		sl.is_green_requested = !btn_set_debounce(GPIOC, nBTN_Pin, (COMMON_DELAY));
-		// HAL_UART_Transmit(&huart6, (uint8_t*) message, sizeof(message), (COMMON_DELAY));
-		switch (sl.current) {
-			case ST_RED:     sl = short_period(sl); break;
-			case ST_GREEN:   sl = restore_period(sl); break;
-			case ST_WARNING: sl = restore_period(sl); break;
-			case ST_YELLOW:  sl = short_period(sl); break;
-			default: break;
-		}
-
-		++i;
-	}
-
-	return sl;
-}
-
-static void turn_on_light(enum light_colours colour) {
-	switch (colour) {
-		case LC_RED:
-			HAL_GPIO_WritePin(GPIOD, YCRA_Pin, GPIO_PIN_SET);
-			HAL_GPIO_WritePin(GPIOD, YARC_Pin, GPIO_PIN_RESET);
-			break;
-		case LC_YELLOW:
-			HAL_GPIO_WritePin(GPIOD, YCRA_Pin, GPIO_PIN_RESET);
-			HAL_GPIO_WritePin(GPIOD, YARC_Pin, GPIO_PIN_SET);
-			break;
-		case LC_GREEN:
-			HAL_GPIO_WritePin(GPIOD, GLC_Pin, GPIO_PIN_SET);
-			break;
-	}
-}
-
-static void turn_off_light(enum light_colours colour) {
-	switch (colour) {
-		case LC_RED:
-		case LC_YELLOW:
-			HAL_GPIO_WritePin(GPIOD, YCRA_Pin, GPIO_PIN_RESET);
-			HAL_GPIO_WritePin(GPIOD, YARC_Pin, GPIO_PIN_RESET);
-			break;
-		case LC_GREEN:
-			HAL_GPIO_WritePin(GPIOD, GLC_Pin, GPIO_PIN_RESET);
-			break;
-	}
-}
-
-static struct stoplight light_state(struct stoplight sl) {
-	const size_t limit        = (sl.states[sl.current].type == LT_NONBLINKING)? 1 : (BLINKS_NR);
-	const size_t blink_period = (sl.states[sl.current].type == LT_NONBLINKING)? limit : (2 * limit);
-
-	for (size_t i = 0; i < limit; ++i) {
-		turn_on_light(sl.states[sl.current].colour);
-		sl = wait_for_press(sl, blink_period);
-
-		turn_off_light(sl.states[sl.current].colour);
-		if (sl.states[sl.current].type != LT_NONBLINKING)
-			sl = wait_for_press(sl, blink_period);
-	}
-	return sl;
-}
-
-
-static struct stoplight stoplight_next_state(struct stoplight sl) {
-	sl = light_state(sl);
-
-	sl.current = (sl.current + 1) % (STATES_NR);
-	return sl;
-}
-
-static struct stoplight stoplight_reset(struct stoplight sl) {
-	sl.current = ST_RED;
-	sl.should_restore = 0;
-	sl.is_green_requested = 0;
-	return sl;
-}
 /* USER CODE END 4 */
 
 /**

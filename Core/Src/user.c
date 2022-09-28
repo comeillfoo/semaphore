@@ -9,6 +9,9 @@
 #include "user.h"
 #include "usart.h"
 #include "queue.h"
+#include "stoplight.h"
+#include "settings.h"
+
 
 static const char* state_names[] = {
 	[ST_RED]     = "red",
@@ -45,8 +48,22 @@ static void set_timeout_execute(struct context ctx, struct request request, char
 
 
 static void set_interrupts_execute(struct context ctx, struct request request, char response[RESPONSE_LENGTH]) {
+	uint32_t pmask = __get_PRIMASK();
+	__disable_irq();
+
 	ctx.setup->is_interrupts_on = request.as_interrupt.polling_or_interrupt;
+	switch (ctx.setup->is_interrupts_on) {
+		case INT_POLLING:
+			HAL_NVIC_DisableIRQ(USART6_IRQn);
+			break;
+		case INT_INTERRUPT:
+			HAL_NVIC_SetPriority(USART6_IRQn, 0, 0);
+			HAL_NVIC_EnableIRQ(USART6_IRQn);
+			break;
+	}
 	snprintf(response, RESPONSE_LENGTH, RESPONSE_OK);
+
+	__set_PRIMASK(pmask);
 }
 
 #undef RESPONSE_OK
