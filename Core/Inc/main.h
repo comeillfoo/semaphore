@@ -36,6 +36,56 @@ extern "C" {
 
 /* Exported types ------------------------------------------------------------*/
 /* USER CODE BEGIN ET */
+enum modes {
+	M_BTN_PROCESSED = 0,
+	M_BTN_IGNORED
+};
+
+enum interrupts {
+	INT_POLLING = 0,
+	INT_INTERRUPT
+};
+
+struct settings {
+	enum modes mode;
+	uint32_t timeout;
+	enum interrupts is_interrupts_on;
+};
+
+enum light_type {
+	LT_NONBLINKING = 0,
+	LT_BLINKING
+};
+
+enum states_type {
+	ST_RED = 0,
+	ST_GREEN = 1,
+	ST_WARNING = 2,
+	ST_YELLOW = 3
+};
+
+enum light_colours {
+	LC_RED = 0,
+	LC_YELLOW,
+	LC_GREEN
+};
+
+
+struct stoplight_state {
+	enum light_colours colour;
+	enum light_type type;
+	uint32_t period_factor;
+};
+
+
+#define STATES_NR 4
+
+struct stoplight {
+	struct stoplight_state states[STATES_NR];
+	enum states_type current;
+	int should_restore;
+	int is_green_requested;
+};
 
 /* USER CODE END ET */
 

@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "usart.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -27,39 +28,7 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-enum light_colours {
-	LC_RED = 0,
-	LC_YELLOW,
-	LC_GREEN
-};
 
-enum light_type {
-	LT_NONBLINKING = 0,
-	LT_BLINKING
-};
-
-enum states_type {
-	ST_RED = 0,
-	ST_GREEN = 1,
-	ST_WARNING = 2,
-	ST_YELLOW = 3
-};
-
-struct stoplight_state {
-	enum light_colours colour;
-	enum light_type type;
-	uint32_t period;
-};
-
-
-#define STATES_NR 4
-
-struct stoplight {
-	struct stoplight_state states[STATES_NR];
-	enum states_type current;
-	int should_restore;
-	int is_green_requested;
-};
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -79,12 +48,18 @@ struct stoplight {
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+static struct settings global_settings = {
+	.mode = M_BTN_PROCESSED,
+	.timeout = BASE_LIGHT_PERIOD,
+	.is_interrupts_on = INT_POLLING
+};
+
 static struct stoplight global_stoplight = {
 	{
-		{LC_RED,    LT_NONBLINKING, BASE_LIGHT_PERIOD * 4},
-		{LC_GREEN,  LT_NONBLINKING, BASE_LIGHT_PERIOD    },
-		{LC_GREEN,  LT_BLINKING,    BASE_LIGHT_PERIOD    },
-		{LC_YELLOW, LT_NONBLINKING, BASE_LIGHT_PERIOD    }
+		{LC_RED,    LT_NONBLINKING, 4},
+		{LC_GREEN,  LT_NONBLINKING, 1},
+		{LC_GREEN,  LT_BLINKING,    1},
+		{LC_YELLOW, LT_NONBLINKING, 1}
 	},
 	ST_RED,
 	0,
@@ -133,6 +108,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_USART6_UART_Init();
   /* USER CODE BEGIN 2 */
   global_stoplight = stoplight_reset(global_stoplight);
   /* USER CODE END 2 */
@@ -206,7 +182,7 @@ static struct stoplight short_period(struct stoplight sl) {
 	if (!sl.should_restore && sl.is_green_requested) {
 		sl.should_restore = 1; // true
 		sl.is_green_requested = 0;
-		sl.states[ST_RED].period = sl.states[ST_RED].period / 4;
+		sl.states[ST_RED].period_factor = sl.states[ST_RED].period_factor / 4;
 	}
 	return sl;
 }
@@ -214,7 +190,7 @@ static struct stoplight short_period(struct stoplight sl) {
 static struct stoplight restore_period(struct stoplight sl) {
 	if (sl.should_restore) {
 		sl.should_restore = 0;
-		sl.states[ST_RED].period = sl.states[ST_RED].period * 4;
+		sl.states[ST_RED].period_factor = sl.states[ST_RED].period_factor * 4;
 	}
 	return sl;
 }
@@ -230,10 +206,11 @@ static GPIO_PinState btn_set_debounce(GPIO_TypeDef* type_p, uint16_t btn, uint32
 
 static struct stoplight wait_for_press(struct stoplight sl, uint32_t blink_period) {
 	size_t i = 0;
-	while ((i * (COMMON_DELAY) * blink_period) < sl.states[sl.current].period) {
+	const char message[] = "hello stm32\r\n";
+	while ((i * (COMMON_DELAY) * blink_period) < sl.states[sl.current].period_factor * global_settings.timeout) {
 		// because nBTN signal is inverted
 		sl.is_green_requested = !btn_set_debounce(GPIOC, nBTN_Pin, (COMMON_DELAY));
-
+		// HAL_UART_Transmit(&huart6, (uint8_t*) message, sizeof(message), (COMMON_DELAY));
 		switch (sl.current) {
 			case ST_RED:     sl = short_period(sl); break;
 			case ST_GREEN:   sl = restore_period(sl); break;
