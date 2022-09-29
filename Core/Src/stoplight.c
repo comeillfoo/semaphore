@@ -71,7 +71,6 @@ static struct stoplight poll_events(struct stoplight sl, uint32_t blink_period) 
 				case ST_YELLOW:  sl = short_period(sl); break;
 				default: break;
 			}
-			// else wait the button period ignoring button
 		}
 
 		timeout = sl.states[sl.current].period_factor * global_settings.timeout;

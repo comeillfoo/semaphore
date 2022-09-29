@@ -28,7 +28,7 @@ size_t queue_read(struct fifo_queue* q, uint8_t* dest, size_t size) {
 		if (q->data[q->counter] == '\n')
 			q->line_feeds--;
 
-		dest[size - read - 1] = q->data[q->counter];
+		dest[read] = q->data[q->data_p - q->counter + 1];
 
 		q->counter--;
 		read++;

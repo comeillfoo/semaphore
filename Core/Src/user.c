@@ -185,15 +185,23 @@ uint32_t user_uart_handler(void) {
 	char echo_buffer_to[RESPONSE_LENGTH];
 	const size_t echo_buffer_to_length = queue_read(&to_user_buffer, (uint8_t*) echo_buffer_to, RESPONSE_LENGTH);
 
+#if 0
+	char msg[RESPONSE_LENGTH];
+	snprintf(msg, RESPONSE_LENGTH, "length: %u\r\n", echo_buffer_to_length);
+	const size_t sz = strlen(msg);
+	HAL_UART_Transmit(&huart6, (uint8_t*) msg, sz, sz * POLLING_RECEIVE_TIMEOUT_PER_CHAR);
+#endif
+
 	ret = HAL_UART_Transmit(&huart6, (uint8_t*) echo_buffer_to, echo_buffer_to_length,
 			echo_buffer_to_length * POLLING_RECEIVE_TIMEOUT_PER_CHAR);
-
+#if 0
 	if (ret == HAL_TIMEOUT) {
-		const char timeout_msg[] = "TO\n";
+		const char timeout_msg[] = "TO\r\n";
 		const size_t timeout_msg_length = strlen(timeout_msg);
 		HAL_UART_Transmit(&huart6, (uint8_t*) timeout_msg, timeout_msg_length,
 				timeout_msg_length * POLLING_RECEIVE_TIMEOUT_PER_CHAR);
 	}
+#endif
 
 	return HAL_GetTick() - start_time;
 }
