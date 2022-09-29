@@ -36,12 +36,20 @@ struct interrupt_args {
 	enum interrupts polling_or_interrupt;
 };
 
+#define RESPONSE_LENGTH 256
+
+struct undefined_args {
+	size_t length;
+	char response[RESPONSE_LENGTH];
+};
+
 struct request {
 	enum command type;
 	union {
 		struct mode_args      as_mode;
 		struct timeout_args   as_timeout;
 		struct interrupt_args as_interrupt;
+		struct undefined_args as_undefined;
 	};
 };
 
@@ -63,19 +71,17 @@ static const char interrupts_names[] = {
 	[INT_INTERRUPT] = 'I'
 };
 
-#define RESPONSE_LENGTH 256
-
 typedef void (*executor)(struct context, struct request, char[RESPONSE_LENGTH]);
 
 static void get_help_execute(struct context ctx, struct request request, char response[RESPONSE_LENGTH]) {
-	snprintf(response, RESPONSE_LENGTH, "%s mode %d timeout %lu %c\n",
+	snprintf(response, RESPONSE_LENGTH, "%s mode %d timeout %lu %c\r\n",
 			state_names[ctx.light->current],
 			ctx.setup->mode + 1,
 			ctx.setup->timeout,
 			interrupts_names[ctx.setup->is_interrupts_on]);
 }
 
-#define RESPONSE_OK "OK\n"
+#define RESPONSE_OK "OK\r\n"
 
 static void set_mode_execute(struct context ctx, struct request request, char response[RESPONSE_LENGTH]) {
 	ctx.setup->mode = request.as_mode.mode;
@@ -117,12 +123,14 @@ static executor executors[] = {
 	[C_SET_INTERRUPTS] = set_interrupts_execute
 };
 
+#define INIT_QUEUE { .counter = 0, .data_p = 0, .line_feeds = 0 }
 
-static struct fifo_queue from_user_buffer, to_user_buffer;
+static struct fifo_queue command_buffer = INIT_QUEUE;
+
 
 static struct request read_command(struct settings setup) {
 	char data[RESPONSE_LENGTH];
-	const size_t bytes = queue_read(&from_user_buffer, (uint8_t*) data, RESPONSE_LENGTH);
+	const size_t bytes = queue_read(&command_buffer, (uint8_t*) data, RESPONSE_LENGTH);
 	if (bytes == 0)
 		return (struct request) { .type = C_NOP };
 
@@ -166,6 +174,14 @@ static struct request read_command(struct settings setup) {
 
 #define POLLING_RECEIVE_TIMEOUT_PER_CHAR (10)
 
+extern struct settings global_settings;
+extern struct stoplight global_stoplight;
+
+static struct fifo_queue from_user_buffer = INIT_QUEUE;
+static struct fifo_queue to_user_buffer = INIT_QUEUE;
+
+#undef INIT_QUEUE
+
 uint32_t user_uart_handler(void) {
 	const uint32_t start_time = HAL_GetTick();
 
@@ -175,15 +191,41 @@ uint32_t user_uart_handler(void) {
 	if (ret == HAL_OK)
 		queue_write(&from_user_buffer, (uint8_t*) &c, 1);
 
-	// TODO: check if there is line feeds symbol so there is a command on execute
+	if (queue_is_empty(&from_user_buffer))
+		return HAL_GetTick() - start_time;
+
 	char echo_buffer_from[RESPONSE_LENGTH];
 	const size_t echo_buffer_from_length = queue_read(&from_user_buffer, (uint8_t*) echo_buffer_from, RESPONSE_LENGTH);
 
+	queue_write(&command_buffer, (uint8_t*) echo_buffer_from, echo_buffer_from_length);
 	queue_write(&to_user_buffer, (uint8_t*) echo_buffer_from, echo_buffer_from_length);
 
+#if 1
+	if (command_buffer.line_feeds > 0) {
+		char response[RESPONSE_LENGTH];
+		const struct request rq = read_command(global_settings);
+//		const char* request_names[] = {
+//				[C_GET_HELP] = "help: \r\n",
+//				[C_SET_MODE] = "modes: \r\n",
+//				[C_SET_TIMEOUT] = "timeout: \r\n",
+//				[C_SET_INTERRUPTS] = "interrupts: \r\n",
+//				[C_NOP] = "no operation: \r\n",
+//				[C_UNDEFINED] = "undefined: \r\n"
+//		};
+//		const size_t prefix_length = strlen(request_names[rq.type]);
+//		queue_write(&to_user_buffer, (uint8_t*) request_names[rq.type], prefix_length);
+
+		if (rq.type != C_NOP && rq.type != C_UNDEFINED) {
+			executors[rq.type]((struct context) { &global_settings, &global_stoplight },
+				rq, response);
+			const size_t response_length = strlen(response);
+			queue_write(&to_user_buffer, (uint8_t*) response, response_length);
+		} // else queue_write(&to_user_buffer, (uint8_t*) rq.as_undefined.response, rq.as_undefined.length);
+	}
 
 	char echo_buffer_to[RESPONSE_LENGTH];
 	const size_t echo_buffer_to_length = queue_read(&to_user_buffer, (uint8_t*) echo_buffer_to, RESPONSE_LENGTH);
+#endif
 
 #if 0
 	char msg[RESPONSE_LENGTH];
@@ -194,6 +236,8 @@ uint32_t user_uart_handler(void) {
 
 	ret = HAL_UART_Transmit(&huart6, (uint8_t*) echo_buffer_to, echo_buffer_to_length,
 			echo_buffer_to_length * POLLING_RECEIVE_TIMEOUT_PER_CHAR);
+
+
 #if 0
 	if (ret == HAL_TIMEOUT) {
 		const char timeout_msg[] = "TO\r\n";

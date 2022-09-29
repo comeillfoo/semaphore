@@ -20,11 +20,10 @@
 #include "main.h"
 #include "usart.h"
 #include "gpio.h"
-#include "stoplight.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "stoplight.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
