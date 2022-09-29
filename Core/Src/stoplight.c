@@ -6,6 +6,7 @@
  */
 
 #include "stoplight.h"
+#include "user.h"
 #include "settings.h"
 #include "gpio.h"
 
@@ -50,19 +51,19 @@ static GPIO_PinState btn_set_debounce(GPIO_TypeDef* type_p, uint16_t btn, uint32
 
 #define BTN_DEBOUNCE_TIMEOUT (100)
 
-#define PASSED_TIME(limit) ((limit) * (BTN_DEBOUNCE_TIMEOUT))
-
 static struct stoplight poll_events(struct stoplight sl, uint32_t blink_period) {
-	size_t i = 0;
+	uint32_t passed_time = 0;
 	uint32_t timeout = sl.states[sl.current].period_factor * global_settings.timeout;
-	while (PASSED_TIME(i * blink_period) < timeout) {
+	while (passed_time * blink_period < timeout) {
 
 		// TODO: handle uart here
+		passed_time += user_uart_handler();
 
 		// process button in polling mode
 		if (global_settings.mode == M_BTN_PROCESSED) {
 			// because nBTN signal is inverted
 			sl.is_green_requested = !btn_set_debounce(GPIOC, nBTN_Pin, BTN_DEBOUNCE_TIMEOUT);
+			passed_time += BTN_DEBOUNCE_TIMEOUT;
 			switch (sl.current) {
 				case ST_RED:     sl = short_period(sl); break;
 				case ST_GREEN:   sl = restore_period(sl); break;
@@ -71,11 +72,9 @@ static struct stoplight poll_events(struct stoplight sl, uint32_t blink_period) 
 				default: break;
 			}
 			// else wait the button period ignoring button
-		} else HAL_Delay(BTN_DEBOUNCE_TIMEOUT);
+		}
 
 		timeout = sl.states[sl.current].period_factor * global_settings.timeout;
-
-		++i;
 	}
 
 	return sl;

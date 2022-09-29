@@ -12,6 +12,8 @@ void queue_write(struct fifo_queue* q, uint8_t* src, size_t size) {
 	size_t i = q->data_p;
 	size_t j = 0;
 	while (i != limit && j != size) {
+		if (src[j] == '\n')
+			q->line_feeds++;
 		q->data[i] = src[j];
 		j++;
 		i = (i + 1) % MAX_QUEUE_SIZE;
@@ -23,7 +25,11 @@ size_t queue_read(struct fifo_queue* q, uint8_t* dest, size_t size) {
 	size_t read = 0;
 	const size_t available = q->counter;
 	while (read < size && read < available && q->counter != 0) {
+		if (q->data[q->counter] == '\n')
+			q->line_feeds--;
+
 		dest[size - read - 1] = q->data[q->counter];
+
 		q->counter--;
 		read++;
 	}

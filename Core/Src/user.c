@@ -12,6 +12,44 @@
 #include "stoplight.h"
 #include "settings.h"
 
+enum command {
+	C_GET_HELP = 0,
+	C_SET_MODE,
+	C_SET_TIMEOUT,
+	C_SET_INTERRUPTS,
+	C_NOP,
+	C_UNDEFINED
+};
+
+struct mode_args {
+	enum command type;
+	enum modes mode;
+};
+
+struct timeout_args {
+	enum command type;
+	uint32_t timeout;
+};
+
+struct interrupt_args {
+	enum command type;
+	enum interrupts polling_or_interrupt;
+};
+
+struct request {
+	enum command type;
+	union {
+		struct mode_args      as_mode;
+		struct timeout_args   as_timeout;
+		struct interrupt_args as_interrupt;
+	};
+};
+
+struct context {
+	struct settings*  setup;
+	struct stoplight* light;
+};
+
 
 static const char* state_names[] = {
 	[ST_RED]     = "red",
@@ -24,6 +62,10 @@ static const char interrupts_names[] = {
 	[INT_POLLING]   = 'P',
 	[INT_INTERRUPT] = 'I'
 };
+
+#define RESPONSE_LENGTH 256
+
+typedef void (*executor)(struct context, struct request, char[RESPONSE_LENGTH]);
 
 static void get_help_execute(struct context ctx, struct request request, char response[RESPONSE_LENGTH]) {
 	snprintf(response, RESPONSE_LENGTH, "%s mode %d timeout %lu %c\n",
@@ -75,12 +117,12 @@ static executor executors[] = {
 	[C_SET_INTERRUPTS] = set_interrupts_execute
 };
 
-static struct fifo_queue buffer;
 
+static struct fifo_queue from_user_buffer, to_user_buffer;
 
-struct request read_command(struct settings setup) {
+static struct request read_command(struct settings setup) {
 	char data[RESPONSE_LENGTH];
-	const size_t bytes = queue_read(&buffer, (uint8_t*) data, RESPONSE_LENGTH);
+	const size_t bytes = queue_read(&from_user_buffer, (uint8_t*) data, RESPONSE_LENGTH);
 	if (bytes == 0)
 		return (struct request) { .type = C_NOP };
 
@@ -121,3 +163,41 @@ struct request read_command(struct settings setup) {
 
 	return (struct request) { .type = C_UNDEFINED };
 }
+
+#define POLLING_RECEIVE_TIMEOUT_PER_CHAR (10)
+
+uint32_t user_uart_handler(void) {
+	const uint32_t start_time = HAL_GetTick();
+
+	// TODO: check the settings and handle interrupts also
+	char c = 0;
+	HAL_StatusTypeDef ret = HAL_UART_Receive(&huart6, (uint8_t*) &c, 1, POLLING_RECEIVE_TIMEOUT_PER_CHAR);
+	if (ret == HAL_OK)
+		queue_write(&from_user_buffer, (uint8_t*) &c, 1);
+
+	// TODO: check if there is line feeds symbol so there is a command on execute
+	char echo_buffer_from[RESPONSE_LENGTH];
+	const size_t echo_buffer_from_length = queue_read(&from_user_buffer, (uint8_t*) echo_buffer_from, RESPONSE_LENGTH);
+
+	queue_write(&to_user_buffer, (uint8_t*) echo_buffer_from, echo_buffer_from_length);
+
+
+	char echo_buffer_to[RESPONSE_LENGTH];
+	const size_t echo_buffer_to_length = queue_read(&to_user_buffer, (uint8_t*) echo_buffer_to, RESPONSE_LENGTH);
+
+	ret = HAL_UART_Transmit(&huart6, (uint8_t*) echo_buffer_to, echo_buffer_to_length,
+			echo_buffer_to_length * POLLING_RECEIVE_TIMEOUT_PER_CHAR);
+
+	if (ret == HAL_TIMEOUT) {
+		const char timeout_msg[] = "TO\n";
+		const size_t timeout_msg_length = strlen(timeout_msg);
+		HAL_UART_Transmit(&huart6, (uint8_t*) timeout_msg, timeout_msg_length,
+				timeout_msg_length * POLLING_RECEIVE_TIMEOUT_PER_CHAR);
+	}
+
+	return HAL_GetTick() - start_time;
+}
+
+#undef POLLING_RECEIVE_TIMEOUT
+
+#undef RESPONSE_LENGTH

@@ -17,6 +17,7 @@ struct fifo_queue {
 	size_t data_p;
 	size_t counter;
 	uint8_t data[MAX_QUEUE_SIZE];
+	size_t line_feeds;
 };
 
 void queue_write(struct fifo_queue*, uint8_t*, size_t);
