@@ -125,12 +125,12 @@ static executor executors[] = {
 
 #define INIT_QUEUE { .counter = 0, .data_p = 0, .line_feeds = 0 }
 
-static struct fifo_queue command_buffer = INIT_QUEUE;
+static struct fifo_queue commands_queue = INIT_QUEUE;
 
 
 static struct request read_command(struct settings setup) {
 	char data[RESPONSE_LENGTH];
-	const size_t bytes = queue_read(&command_buffer, (uint8_t*) data, RESPONSE_LENGTH);
+	const size_t bytes = queue_read(&commands_queue, (uint8_t*) data, RESPONSE_LENGTH);
 	if (bytes == 0)
 		return (struct request) { .type = C_NOP };
 
@@ -155,14 +155,14 @@ static struct request read_command(struct settings setup) {
 			.as_timeout = { C_SET_TIMEOUT, secs * 1000 }
 		};
 
-	ret = strcmp("set interrupts on", data);
+	ret = strcmp("set interrupts on\r\n", data);
 	if (ret == 0)
 		return (struct request) {
 			.type = C_SET_INTERRUPTS,
 			.as_interrupt = { C_SET_INTERRUPTS, INT_INTERRUPT }
 		};
 
-	ret = strcmp("set interrupts off", data);
+	ret = strcmp("set interrupts off\r\n", data);
 	if (ret == 0)
 		return (struct request) {
 			.type = C_SET_INTERRUPTS,
@@ -177,55 +177,59 @@ static struct request read_command(struct settings setup) {
 extern struct settings global_settings;
 extern struct stoplight global_stoplight;
 
-static struct fifo_queue from_user_buffer = INIT_QUEUE;
-static struct fifo_queue to_user_buffer = INIT_QUEUE;
+static struct fifo_queue from_user_queue = INIT_QUEUE;
+static struct fifo_queue to_user_queue = INIT_QUEUE;
 
 #undef INIT_QUEUE
+
+static char last_symbol = 0;
+
+static char echo_buffer_from[RESPONSE_LENGTH];
+static char echo_buffer_to[RESPONSE_LENGTH];
+
+static HAL_StatusTypeDef receive_status = HAL_OK;
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+	if (receive_status == HAL_OK)
+		queue_write(&from_user_queue, (uint8_t*) &last_symbol, 1);
+}
 
 uint32_t user_uart_handler(void) {
 	const uint32_t start_time = HAL_GetTick();
 
-	// TODO: check the settings and handle interrupts also
-	char c = 0;
-	HAL_StatusTypeDef ret = HAL_UART_Receive(&huart6, (uint8_t*) &c, 1, POLLING_RECEIVE_TIMEOUT_PER_CHAR);
-	if (ret == HAL_OK)
-		queue_write(&from_user_buffer, (uint8_t*) &c, 1);
+	// init the receiving routine
+	if (!global_settings.is_interrupts_on) {
+		receive_status = HAL_UART_Receive(&huart6, (uint8_t*) &last_symbol, 1, POLLING_RECEIVE_TIMEOUT_PER_CHAR);
+		HAL_UART_RxCpltCallback(&huart6);
+	} else
+		receive_status = HAL_UART_Receive_IT(&huart6, (uint8_t*) &last_symbol, 1);
 
-	if (queue_is_empty(&from_user_buffer))
+
+	if (queue_is_empty(&from_user_queue))
 		return HAL_GetTick() - start_time;
 
-	char echo_buffer_from[RESPONSE_LENGTH];
-	const size_t echo_buffer_from_length = queue_read(&from_user_buffer, (uint8_t*) echo_buffer_from, RESPONSE_LENGTH);
+	const size_t echo_buffer_from_length = queue_read(&from_user_queue, (uint8_t*) echo_buffer_from, RESPONSE_LENGTH);
 
-	queue_write(&command_buffer, (uint8_t*) echo_buffer_from, echo_buffer_from_length);
-	queue_write(&to_user_buffer, (uint8_t*) echo_buffer_from, echo_buffer_from_length);
+	queue_write(&commands_queue, (uint8_t*) echo_buffer_from, echo_buffer_from_length);
+	queue_write(&to_user_queue, (uint8_t*) echo_buffer_from, echo_buffer_from_length);
 
-#if 1
-	if (command_buffer.line_feeds > 0) {
+	// if there is a command execute command
+	if (commands_queue.line_feeds > 0) {
 		char response[RESPONSE_LENGTH];
 		const struct request rq = read_command(global_settings);
-//		const char* request_names[] = {
-//				[C_GET_HELP] = "help: \r\n",
-//				[C_SET_MODE] = "modes: \r\n",
-//				[C_SET_TIMEOUT] = "timeout: \r\n",
-//				[C_SET_INTERRUPTS] = "interrupts: \r\n",
-//				[C_NOP] = "no operation: \r\n",
-//				[C_UNDEFINED] = "undefined: \r\n"
-//		};
-//		const size_t prefix_length = strlen(request_names[rq.type]);
-//		queue_write(&to_user_buffer, (uint8_t*) request_names[rq.type], prefix_length);
 
 		if (rq.type != C_NOP && rq.type != C_UNDEFINED) {
 			executors[rq.type]((struct context) { &global_settings, &global_stoplight },
 				rq, response);
 			const size_t response_length = strlen(response);
-			queue_write(&to_user_buffer, (uint8_t*) response, response_length);
-		} // else queue_write(&to_user_buffer, (uint8_t*) rq.as_undefined.response, rq.as_undefined.length);
+			queue_write(&to_user_queue, (uint8_t*) response, response_length);
+		}
 	}
 
-	char echo_buffer_to[RESPONSE_LENGTH];
-	const size_t echo_buffer_to_length = queue_read(&to_user_buffer, (uint8_t*) echo_buffer_to, RESPONSE_LENGTH);
-#endif
+	// if there are no symbols on output returns
+	if (queue_is_empty(&to_user_queue))
+		return HAL_GetTick() - start_time;
+
+	const size_t echo_buffer_to_length = queue_read(&to_user_queue, (uint8_t*) echo_buffer_to, RESPONSE_LENGTH);
 
 #if 0
 	char msg[RESPONSE_LENGTH];
@@ -234,7 +238,10 @@ uint32_t user_uart_handler(void) {
 	HAL_UART_Transmit(&huart6, (uint8_t*) msg, sz, sz * POLLING_RECEIVE_TIMEOUT_PER_CHAR);
 #endif
 
-	ret = HAL_UART_Transmit(&huart6, (uint8_t*) echo_buffer_to, echo_buffer_to_length,
+	if (global_settings.is_interrupts_on)
+		HAL_UART_Transmit_IT(&huart6, (uint8_t*) echo_buffer_to, echo_buffer_to_length);
+	else
+		HAL_UART_Transmit(&huart6, (uint8_t*) echo_buffer_to, echo_buffer_to_length,
 			echo_buffer_to_length * POLLING_RECEIVE_TIMEOUT_PER_CHAR);
 
 
