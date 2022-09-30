@@ -102,6 +102,7 @@ static void set_interrupts_execute(struct context ctx, struct request request, c
 	ctx.setup->is_interrupts_on = request.as_interrupt.polling_or_interrupt;
 	switch (ctx.setup->is_interrupts_on) {
 		case INT_POLLING:
+			HAL_UART_Abort_IT();
 			HAL_NVIC_DisableIRQ(USART6_IRQn);
 			break;
 		case INT_INTERRUPT:
