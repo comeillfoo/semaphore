@@ -102,7 +102,7 @@ static void set_interrupts_execute(struct context ctx, struct request request, c
 	ctx.setup->is_interrupts_on = request.as_interrupt.polling_or_interrupt;
 	switch (ctx.setup->is_interrupts_on) {
 		case INT_POLLING:
-			HAL_UART_Abort_IT();
+			HAL_UART_Abort_IT(&huart6);
 			HAL_NVIC_DisableIRQ(USART6_IRQn);
 			break;
 		case INT_INTERRUPT:
@@ -126,7 +126,7 @@ static executor executors[] = {
 
 #define INIT_QUEUE { .counter = 0, .data_p = 0, .line_feeds = 0 }
 
-static struct fifo_queue commands_queue = INIT_QUEUE;
+struct fifo_queue commands_queue = INIT_QUEUE;
 
 
 static struct request read_command(struct settings setup) {
@@ -156,14 +156,20 @@ static struct request read_command(struct settings setup) {
 			.as_timeout = { C_SET_TIMEOUT, secs * 1000 }
 		};
 
-	ret = strcmp("set interrupts on\r\n", data);
+	// remove newline symbols
+	char* ptr = data;
+	while (*ptr != '\n' && *ptr != '\r' && *ptr != '\t' && *ptr != 0)
+		ptr++;
+	*ptr = 0;
+
+	ret = strcmp("set interrupts on", data);
 	if (ret == 0)
 		return (struct request) {
 			.type = C_SET_INTERRUPTS,
 			.as_interrupt = { C_SET_INTERRUPTS, INT_INTERRUPT }
 		};
 
-	ret = strcmp("set interrupts off\r\n", data);
+	ret = strcmp("set interrupts off", data);
 	if (ret == 0)
 		return (struct request) {
 			.type = C_SET_INTERRUPTS,
@@ -190,8 +196,7 @@ static char echo_buffer_to[RESPONSE_LENGTH];
 
 static HAL_StatusTypeDef receive_status = HAL_OK;
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
-	if (receive_status == HAL_OK)
-		queue_write(&from_user_queue, (uint8_t*) &last_symbol, 1);
+	queue_write(&from_user_queue, (uint8_t*) &last_symbol, 1);
 }
 
 uint32_t user_uart_handler(void) {
@@ -200,9 +205,9 @@ uint32_t user_uart_handler(void) {
 	// init the receiving routine
 	if (!global_settings.is_interrupts_on) {
 		receive_status = HAL_UART_Receive(&huart6, (uint8_t*) &last_symbol, 1, POLLING_RECEIVE_TIMEOUT_PER_CHAR);
-		HAL_UART_RxCpltCallback(&huart6);
-	} else
-		receive_status = HAL_UART_Receive_IT(&huart6, (uint8_t*) &last_symbol, 1);
+		if (receive_status == HAL_OK)
+			queue_write(&from_user_queue, (uint8_t*) &last_symbol, 1);
+	} else receive_status = HAL_UART_Receive_IT(&huart6, (uint8_t*) &last_symbol, 1);
 
 
 	if (queue_is_empty(&from_user_queue))
@@ -229,6 +234,9 @@ uint32_t user_uart_handler(void) {
 	// if there are no symbols on output returns
 	if (queue_is_empty(&to_user_queue))
 		return HAL_GetTick() - start_time;
+
+	if (global_settings.is_interrupts_on)
+		while (HAL_UART_GetState(&huart6) == HAL_UART_STATE_BUSY_TX);
 
 	const size_t echo_buffer_to_length = queue_read(&to_user_queue, (uint8_t*) echo_buffer_to, RESPONSE_LENGTH);
 

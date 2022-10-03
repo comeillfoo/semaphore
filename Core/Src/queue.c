@@ -30,14 +30,22 @@ size_t queue_read(struct fifo_queue* q, uint8_t* dest, size_t size) {
 	return j;
 }
 
+extern struct fifo_queue commands_queue;
+
 void queue_write(struct fifo_queue* q, uint8_t* src, size_t size) {
-	const size_t limit = (size + q->data_p) % MAX_QUEUE_SIZE;
+	size_t limit = (size + q->data_p) % MAX_QUEUE_SIZE;
 	size_t i = 0;
 	// TODO: fix backspace bug on queue level
 	while (q->data_p != limit && i < size) {
-		q->data[q->data_p] = src[i];
-		q->data_p = (q->data_p + 1) % MAX_QUEUE_SIZE;
-		q->counter++;
+		if (src[i] == 127 && q == &commands_queue) {
+			char last_symbol;
+			queue_read(q, (uint8_t*) &last_symbol, 1);
+			q->data_p--;
+		} else {
+			q->data[q->data_p] = src[i];
+			q->data_p = (q->data_p + 1) % MAX_QUEUE_SIZE;
+			q->counter++;
+		}
 
 		if (src[i] == '\r') {
 			q->line_feeds++;
