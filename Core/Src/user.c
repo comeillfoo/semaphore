@@ -141,20 +141,27 @@ static struct request read_command(struct settings setup) {
 	int ret = 0;
 	int mode = 0;
 	ret = sscanf(data, "set mode %d", &mode);
-	if (ret == 1)
+	if (ret == 1) {
+		if (mode != 1 && mode != 2)
+			return (struct request) { .type = C_UNDEFINED };
+
 		return (struct request) {
 			.type = C_SET_MODE,
 			.as_mode = { C_SET_MODE, (mode == 1)? M_BTN_PROCESSED : M_BTN_IGNORED }
 		};
+	}
 
 	ret = 0;
 	uint32_t secs = 0;
 	ret = sscanf(data, "set timeout %lu", &secs);
-	if (ret == 1)
+	if (ret == 1) {
+		if (secs == 0) return (struct request) { .type = C_UNDEFINED };
+
 		return (struct request) {
 			.type = C_SET_TIMEOUT,
 			.as_timeout = { C_SET_TIMEOUT, secs * 1000 }
 		};
+	}
 
 	// remove newline symbols
 	char* ptr = data;
