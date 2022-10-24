@@ -243,7 +243,7 @@ uint32_t user_uart_handler(void) {
 		return HAL_GetTick() - start_time;
 
 	if (global_settings.is_interrupts_on)
-		while (HAL_UART_GetState(&huart6) == HAL_UART_STATE_BUSY_TX);
+		if (HAL_UART_GetState(&huart6) == HAL_UART_STATE_BUSY_TX) return HAL_GetTick() - start_time;
 
 	const size_t echo_buffer_to_length = queue_read(&to_user_queue, (uint8_t*) echo_buffer_to, RESPONSE_LENGTH);
 
